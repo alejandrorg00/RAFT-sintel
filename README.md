@@ -1,3 +1,139 @@
+# RAFT Sintel-only training notes
+
+This fork adds a minimal `sintel_scratch` training path for training RAFT from random initialization using only MPI-Sintel clean/final frames and Sintel flow ground truth. It does not use FlyingChairs, FlyingThings3D, KITTI, or HD1K.
+
+## Dataset expected by this setup
+
+Download MPI-Sintel optical-flow training data and place it as:
+
+```text
+RAFT-master/
+└── datasets/
+    └── Sintel/
+        └── training/
+            ├── clean/
+            ├── final/
+            └── flow/
+```
+
+You do not need Chairs, Things, KITTI, or HD1K for `--stage sintel_scratch`.
+
+## Training command
+
+Linux/WSL:
+
+```bash
+bash train_sintel_scratch.sh
+```
+
+Equivalent explicit command:
+
+```bash
+python -u train.py \
+  --name raft-sintel-scratch-bs4 \
+  --stage sintel_scratch \
+  --validation sintel \
+  --gpus 0 \
+  --num_steps 100000 \
+  --batch_size 4 \
+  --lr 0.0001 \
+  --image_size 368 768 \
+  --wdecay 0.00001 \
+  --gamma 0.85 \
+  --mixed_precision
+```
+
+Windows PowerShell:
+
+```powershell
+python -u train.py `
+  --name raft-sintel-scratch-bs4 `
+  --stage sintel_scratch `
+  --validation sintel `
+  --gpus 0 `
+  --num_steps 100000 `
+  --batch_size 4 `
+  --lr 0.0001 `
+  --image_size 368 768 `
+  --wdecay 0.00001 `
+  --gamma 0.85 `
+  --mixed_precision
+```
+
+Do not pass `--restore_ckpt` if the goal is training from scratch.
+
+## Changes made
+
+### `core/datasets.py`
+
+Added a new `sintel_scratch` stage inside `fetch_dataloader(args, TRAIN_DS='C+T+K+S+H')`.
+
+```diff
++    elif args.stage == 'sintel_scratch':
++        # Sintel-only training from random initialization.
++        # This excludes FlyingThings3D, KITTI, and HD1K.
++        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
++        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean')
++        sintel_final = MpiSintel(aug_params, split='training', dstype='final')
++        train_dataset = 100*sintel_clean + 100*sintel_final
++
+     elif args.stage == 'sintel':
+         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
+         things = FlyingThings3D(aug_params, dstype='frames_cleanpass')
+```
+
+Reason: the original `--stage sintel` is not Sintel-only. It mixes Sintel with FlyingThings3D and, depending on `TRAIN_DS`, also KITTI and HD1K. The new stage leaves the original RAFT behavior untouched while adding a clean Sintel-only route.
+
+### `train.py`
+
+Changed BatchNorm freezing so it only happens when fine-tuning from a checkpoint.
+
+```diff
+-    if args.stage != 'chairs':
+-        model.module.freeze_bn()
++    # If training from scratch directly on Sintel, do not freeze randomly initialized BN statistics.
++    # Keep original RAFT behavior only when fine-tuning from an existing checkpoint.
++    if args.stage != 'chairs' and args.restore_ckpt is not None:
++        model.module.freeze_bn()
+```
+
+And after validation:
+
+```diff
+-                if args.stage != 'chairs':
+-                    model.module.freeze_bn()
++                if args.stage != 'chairs' and args.restore_ckpt is not None:
++                    model.module.freeze_bn()
+```
+
+Reason: the original RAFT training schedule trains on Chairs/Things first, so BatchNorm statistics already exist before Sintel fine-tuning. When training directly from scratch on Sintel, freezing BatchNorm immediately would freeze untrained/random running statistics.
+
+### `train_sintel_scratch.sh`
+
+Added a convenience launcher:
+
+```diff
++#!/bin/bash
++mkdir -p checkpoints
++
++python -u train.py \
++  --name raft-sintel-scratch-bs4 \
++  --stage sintel_scratch \
++  --validation sintel \
++  --gpus 0 \
++  --num_steps 100000 \
++  --batch_size 5 \
++  --lr 0.0001 \
++  --image_size 368 768 \
++  --wdecay 0.00001 \
++  --gamma 0.85 \
++  --mixed_precision
+```
+
+Reason: this gives a reproducible single-GPU command for a 20 GB GPU. If CUDA memory fails, reduce `--batch_size 5` to `--batch_size 2`. If memory is available, try `--batch_size 5`.
+
+---
+
 # RAFT
 This repository contains the source code for our paper:
 

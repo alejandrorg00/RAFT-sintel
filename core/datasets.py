@@ -208,6 +208,13 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         clean_dataset = FlyingThings3D(aug_params, dstype='frames_cleanpass')
         final_dataset = FlyingThings3D(aug_params, dstype='frames_finalpass')
         train_dataset = clean_dataset + final_dataset
+    
+    elif args.stage == 'sintel_scratch':
+        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
+        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean')
+        sintel_final = MpiSintel(aug_params, split='training', dstype='final')        
+        train_dataset = 100*sintel_clean + 100*sintel_final 
+        # 100 repeats the dataset so that the dataloader has enough samples per epoch (sampling convenience) 
 
     elif args.stage == 'sintel':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}

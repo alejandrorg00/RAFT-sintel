@@ -144,7 +144,7 @@ def train(args):
     model.cuda()
     model.train()
 
-    if args.stage != 'chairs':
+    if args.stage != 'chairs' and args.restore_ckpt is not None:
         model.module.freeze_bn()
 
     train_loader = datasets.fetch_dataloader(args)
@@ -198,7 +198,7 @@ def train(args):
                 logger.write_dict(results)
                 
                 model.train()
-                if args.stage != 'chairs':
+                if args.stage != 'chairs' and args.restore_ckpt is not None:
                     model.module.freeze_bn()
             
             total_steps += 1
