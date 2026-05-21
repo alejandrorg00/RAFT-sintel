@@ -26,42 +26,6 @@ Linux/WSL:
 bash train_sintel_scratch.sh
 ```
 
-Equivalent explicit command:
-
-```bash
-python -u train.py \
-  --name raft-sintel-scratch-bs4 \
-  --stage sintel_scratch \
-  --validation sintel \
-  --gpus 0 \
-  --num_steps 100000 \
-  --batch_size 4 \
-  --lr 0.0001 \
-  --image_size 368 768 \
-  --wdecay 0.00001 \
-  --gamma 0.85 \
-  --mixed_precision
-```
-
-Windows PowerShell:
-
-```powershell
-python -u train.py `
-  --name raft-sintel-scratch-bs4 `
-  --stage sintel_scratch `
-  --validation sintel `
-  --gpus 0 `
-  --num_steps 100000 `
-  --batch_size 4 `
-  --lr 0.0001 `
-  --image_size 368 768 `
-  --wdecay 0.00001 `
-  --gamma 0.85 `
-  --mixed_precision
-```
-
-Do not pass `--restore_ckpt` if the goal is training from scratch.
-
 ## Changes made
 
 ### `core/datasets.py`
