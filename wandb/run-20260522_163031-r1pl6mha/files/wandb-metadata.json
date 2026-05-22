@@ -1,0 +1,64 @@
+{
+  "os": "Windows-10-10.0.19045-SP0",
+  "python": "CPython 3.10.20",
+  "startedAt": "2026-05-22T15:30:31.008606Z",
+  "args": [
+    "--name",
+    "raft-sintel-flyvis-split-rgb-bs8",
+    "--stage",
+    "sintel_flyvis_split",
+    "--validation",
+    "sintel_flyvis_split",
+    "--gpus",
+    "0",
+    "--num_steps",
+    "100000",
+    "--batch_size",
+    "8",
+    "--lr",
+    "0.0001",
+    "--image_size",
+    "368",
+    "768",
+    "--wdecay",
+    "0.00001",
+    "--gamma",
+    "0.85",
+    "--mixed_precision"
+  ],
+  "program": "H:\\Desktop\\Github\\RAFT-sintel\\train.py",
+  "codePath": "train.py",
+  "codePathLocal": "train.py",
+  "git": {
+    "remote": "https://github.com/alejandrorg00/RAFT-sintel.git",
+    "commit": "bc815de9c1f1d07a82be42825834ac3114c7b798"
+  },
+  "email": "alejandrorodriguezgarcia00@gmail.com",
+  "root": "H:\\Desktop\\Github\\RAFT-sintel",
+  "host": "FMS-522830",
+  "executable": "C:\\ProgramData\\anaconda3\\envs\\raft_env\\python.exe",
+  "cpu_count": 24,
+  "cpu_count_logical": 32,
+  "gpu": "NVIDIA RTX 4000 SFF Ada Generation",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "13042017576058880",
+      "used": "9920185848307712"
+    }
+  },
+  "memory": {
+    "total": "68447977472"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA RTX 4000 SFF Ada Generation",
+      "memoryTotal": "21469593600",
+      "cudaCores": 6144,
+      "architecture": "Ada",
+      "uuid": "GPU-148f2fbc-137d-2d97-996e-2147323cd636"
+    }
+  ],
+  "cudaVersion": "12.4",
+  "writerId": "redwdkguyx8tlxjkd997jr1x3koksbr0"
+}

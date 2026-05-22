@@ -19,7 +19,8 @@ from raft import RAFT
 import evaluate
 import datasets
 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 try:
     from torch.cuda.amp import GradScaler
@@ -85,28 +86,38 @@ def fetch_optimizer(args, model):
 
     return optimizer, scheduler
     
-
 class Logger:
-    def __init__(self, model, scheduler):
+    def __init__(self, model, scheduler, use_wandb=True):
         self.model = model
         self.scheduler = scheduler
         self.total_steps = 0
         self.running_loss = {}
-        self.writer = None
+        self.use_wandb = use_wandb
 
     def _print_training_status(self):
-        metrics_data = [self.running_loss[k]/SUM_FREQ for k in sorted(self.running_loss.keys())]
-        training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps+1, self.scheduler.get_last_lr()[0])
-        metrics_str = ("{:10.4f}, "*len(metrics_data)).format(*metrics_data)
-        
-        # print the training status
+        metrics_data = [
+            self.running_loss[k] / SUM_FREQ
+            for k in sorted(self.running_loss.keys())
+        ]
+
+        training_str = "[{:6d}, {:10.7f}] ".format(
+            self.total_steps + 1,
+            self.scheduler.get_last_lr()[0],
+        )
+        metrics_str = ("{:10.4f}, " * len(metrics_data)).format(*metrics_data)
+
         print(training_str + metrics_str)
 
-        if self.writer is None:
-            self.writer = SummaryWriter()
+        log_dict = {
+            k: self.running_loss[k] / SUM_FREQ
+            for k in self.running_loss
+        }
+        log_dict["lr"] = self.scheduler.get_last_lr()[0]
+
+        if self.use_wandb:
+            wandb.log(log_dict, step=self.total_steps)
 
         for k in self.running_loss:
-            self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
             self.running_loss[k] = 0.0
 
     def push(self, metrics):
@@ -118,20 +129,69 @@ class Logger:
 
             self.running_loss[key] += metrics[key]
 
-        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+        if self.total_steps % SUM_FREQ == SUM_FREQ - 1:
             self._print_training_status()
             self.running_loss = {}
 
     def write_dict(self, results):
-        if self.writer is None:
-            self.writer = SummaryWriter()
+        print("Validation results:")
+        for key, value in results.items():
+            print(f"{key}: {value}")
 
-        for key in results:
-            self.writer.add_scalar(key, results[key], self.total_steps)
+        if self.use_wandb:
+            wandb.log(results, step=self.total_steps)
 
     def close(self):
-        if self.writer is not None:
-            self.writer.close()
+        if self.use_wandb:
+            wandb.finish()
+
+# class Logger:
+#     def __init__(self, model, scheduler, log_dir=None):
+#         self.model = model
+#         self.scheduler = scheduler
+#         self.total_steps = 0
+#         self.running_loss = {}
+#         self.writer = None
+#         self.log_dir = log_dir
+
+#     def _print_training_status(self):
+#         metrics_data = [self.running_loss[k]/SUM_FREQ for k in sorted(self.running_loss.keys())]
+#         training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps+1, self.scheduler.get_last_lr()[0])
+#         metrics_str = ("{:10.4f}, "*len(metrics_data)).format(*metrics_data)
+        
+#         # print the training status
+#         print(training_str + metrics_str)
+
+#         if self.writer is None:
+#             self.writer = SummaryWriter(log_dir=self.log_dir)
+
+#         for k in self.running_loss:
+#             self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
+#             self.running_loss[k] = 0.0
+
+#     def push(self, metrics):
+#         self.total_steps += 1
+
+#         for key in metrics:
+#             if key not in self.running_loss:
+#                 self.running_loss[key] = 0.0
+
+#             self.running_loss[key] += metrics[key]
+
+#         if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+#             self._print_training_status()
+#             self.running_loss = {}
+
+#     def write_dict(self, results):
+#         if self.writer is None:
+#             self.writer = SummaryWriter(log_dir=self.log_dir)
+
+#         for key in results:
+#             self.writer.add_scalar(key, results[key], self.total_steps)
+
+#     def close(self):
+#         if self.writer is not None:
+#             self.writer.close()
 
 
 def train(args):
@@ -153,7 +213,11 @@ def train(args):
 
     total_steps = 0
     scaler = GradScaler(enabled=args.mixed_precision)
-    logger = Logger(model, scheduler)
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    use_wandb = not args.no_wandb
+    if use_wandb:
+        wandb.init(project="raft-sintel-flyvis", name=f"{args.name}_{run_id}", config=vars(args))
+    logger = Logger(model, scheduler, use_wandb=use_wandb)
 
     VAL_FREQ = 5000
     add_noise = True
@@ -184,7 +248,7 @@ def train(args):
             logger.push(metrics)
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
-                PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
+                PATH = 'checkpoints/%d_%s_%s.pth' % (total_steps+1, args.name, run_id)
                 torch.save(model.state_dict(), PATH)
 
                 results = {}
@@ -216,7 +280,7 @@ def train(args):
                 break
 
     logger.close()
-    PATH = 'checkpoints/%s.pth' % args.name
+    PATH = 'checkpoints/%s_%s.pth' % (args.name, run_id)
     torch.save(model.state_dict(), PATH)
 
     return PATH
@@ -236,6 +300,7 @@ if __name__ == '__main__':
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
     parser.add_argument('--gpus', type=int, nargs='+', default=[0,1])
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    parser.add_argument('--no_wandb', action='store_true', help='disable wandb logging')
 
     parser.add_argument('--iters', type=int, default=12)
     parser.add_argument('--wdecay', type=float, default=.00005)

@@ -36,6 +36,8 @@ python -u train.py --name raft-sintel-flyvis-split-lum-bs8 --stage sintel_flyvis
 ```
 Alternatively one can run on hpc `train_sintel.sh`
 
+(Added wandb logs as TensorBoard was not working, to remove logs use `--no_wandb`)
+
 ---
 # RAFT
 This repository contains the source code for our paper:
