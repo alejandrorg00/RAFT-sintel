@@ -130,7 +130,8 @@ class Logger:
             self.writer.add_scalar(key, results[key], self.total_steps)
 
     def close(self):
-        self.writer.close()
+        if self.writer is not None:
+            self.writer.close()
 
 
 def train(args):
@@ -192,6 +193,9 @@ def train(args):
                         results.update(evaluate.validate_chairs(model.module))
                     elif val_dataset == 'sintel':
                         results.update(evaluate.validate_sintel(model.module))
+                    ### SINTEL FLYVIS SPLIT ###
+                    elif val_dataset == 'sintel_flyvis_split':
+                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters))
                     elif val_dataset == 'kitti':
                         results.update(evaluate.validate_kitti(model.module))
 
@@ -203,7 +207,7 @@ def train(args):
             
             total_steps += 1
 
-            if total_steps > args.num_steps:
+            if total_steps >= args.num_steps:
                 should_keep_training = False
                 break
 

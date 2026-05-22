@@ -14,6 +14,35 @@ import os.path as osp
 from utils import frame_utils
 from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
 
+# FlyVis scene-level Sintel split.
+FLYVIS_TRAIN_SCENES = [
+    "alley_1",
+    "alley_2",
+    "ambush_4",
+    "ambush_5",
+    "ambush_6",
+    "ambush_7",
+    "bamboo_2",
+    "bandage_2",
+    "cave_2",
+    "market_5",
+    "market_6",
+    "shaman_2",
+    "shaman_3",
+    "sleeping_1",
+    "sleeping_2",
+    "temple_2",
+    "temple_3",
+]
+
+FLYVIS_VAL_SCENES = [
+    "ambush_2",
+    "bamboo_1",
+    "bandage_1",
+    "cave_4",
+    "market_2",
+    "mountain_1",
+]
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
@@ -100,7 +129,7 @@ class FlowDataset(data.Dataset):
         
 
 class MpiSintel(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean'):
+    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean', scenes=None):
         super(MpiSintel, self).__init__(aug_params)
         flow_root = osp.join(root, split, 'flow')
         image_root = osp.join(root, split, dstype)
@@ -108,7 +137,12 @@ class MpiSintel(FlowDataset):
         if split == 'test':
             self.is_test = True
 
-        for scene in os.listdir(image_root):
+        scenes = set(scenes) if scenes is not None else None
+
+        for scene in sorted(os.listdir(image_root)):
+            if scenes is not None and scene not in scenes:
+                continue
+
             image_list = sorted(glob(osp.join(image_root, scene, '*.png')))
             for i in range(len(image_list)-1):
                 self.image_list += [ [image_list[i], image_list[i+1]] ]
@@ -209,13 +243,6 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         final_dataset = FlyingThings3D(aug_params, dstype='frames_finalpass')
         train_dataset = clean_dataset + final_dataset
     
-    elif args.stage == 'sintel_scratch':
-        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
-        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean')
-        sintel_final = MpiSintel(aug_params, split='training', dstype='final')        
-        train_dataset = 100*sintel_clean + 100*sintel_final 
-        # 100 repeats the dataset so that the dataloader has enough samples per epoch (sampling convenience) 
-
     elif args.stage == 'sintel':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
         things = FlyingThings3D(aug_params, dstype='frames_cleanpass')
@@ -229,6 +256,15 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
 
         elif TRAIN_DS == 'C+T+K/S':
             train_dataset = 100*sintel_clean + 100*sintel_final + things
+    
+    ### SINTEL FLYVIS SPLIT ###
+    elif args.stage == 'sintel_flyvis_split':
+        # Train only on the FlyVis scene-level training split.
+        # Validation should use --validation sintel_flyvis_split.
+        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
+        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES)
+        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES)
+        train_dataset = 100*sintel_clean + 100*sintel_final
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
