@@ -128,20 +128,18 @@ def validate_sintel(model, iters=32):
 
 ### SINTEL FLYVIS SPLIT ###
 @torch.no_grad()
-def validate_sintel_flyvis_split(model, iters=32):
-    """Perform validation using the FlyVis held-out Sintel scene split.
-
-    This evaluates on held-out scenes from MPI-Sintel training, because Sintel
-    test labels are withheld by the official benchmark.
-    """
+def validate_sintel_flyvis_split(model, iters=32, input_mode='rgb', tag='sintel_flyvis_split'):
     model.eval()
     results = {}
+
     for dstype in ['clean', 'final']:
         val_dataset = datasets.MpiSintel(
             split='training',
             dstype=dstype,
             scenes=datasets.FLYVIS_VAL_SCENES,
+            input_mode=input_mode,
         )
+
         epe_list = []
 
         for val_id in range(len(val_dataset)):
@@ -155,17 +153,22 @@ def validate_sintel_flyvis_split(model, iters=32):
             flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
             flow = padder.unpad(flow_pr[0]).cpu()
 
-            epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
+            epe = torch.sum((flow - flow_gt) ** 2, dim=0).sqrt()
             epe_list.append(epe.view(-1).numpy())
 
         epe_all = np.concatenate(epe_list)
+
         epe = np.mean(epe_all)
         px1 = np.mean(epe_all < 1)
         px3 = np.mean(epe_all < 3)
         px5 = np.mean(epe_all < 5)
 
-        print("Validation FlyVis split (%s) EPE: %f, 1px: %f, 3px: %f, 5px: %f" % (dstype, epe, px1, px3, px5))
-        results['flyvis_split_%s' % dstype] = epe
+        print(
+            "Validation %s (%s) EPE: %f, 1px: %f, 3px: %f, 5px: %f"
+            % (tag, dstype, epe, px1, px3, px5)
+        )
+
+        results['%s_%s' % (tag, dstype)] = epe
 
     return results
 
@@ -234,7 +237,18 @@ if __name__ == '__main__':
             validate_sintel(model.module)
         ### SINTEL FLYVIS SPLIT ###
         elif args.dataset == 'sintel_flyvis_split':
-            validate_sintel_flyvis_split(model.module)
+            validate_sintel_flyvis_split(
+                model.module,
+                input_mode='rgb',
+                tag='sintel_flyvis_split',
+            )
+
+        elif args.dataset == 'sintel_flyvis_split_lum':
+            validate_sintel_flyvis_split(
+                model.module,
+                input_mode='lum',
+                tag='sintel_flyvis_split_lum',
+            )
 
         elif args.dataset == 'kitti':
             validate_kitti(model.module)

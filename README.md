@@ -1,47 +1,42 @@
-# RAFT flyvis split Sintel training notes
+# RAFT FlyVis split Sintel training notes
 
-This fork also supports a FlyVis-compatible local validation split. Sintel `test/` has no local flow ground truth, so local EPE must be computed from held-out scenes inside `datasets/Sintel/training`. The FlyVis-style split keeps validation scenes out of training. Changes have been made to `core/datasets.py` `evaluate.py` and `train.py`, and are marked with `### SINTEL FLYVIS SPLIT ###`.
+This fork supports a FlyVis-compatible local validation split for RAFT training on Sintel. Since Sintel `test/` does not provide local optical-flow ground truth, local EPE is computed using held-out scenes from `datasets/Sintel/training`.
 
-### Scene split
-Training scenes:
+The FlyVis-style split keeps validation scenes out of training. The fork currently supports two matched RAFT baselines:
+
+1. `sintel_flyvis_split`  
+   Standard RGB Sintel frames.
+
+2. `sintel_flyvis_split_lum`  
+   Luminance-only Sintel frames. RGB frames are converted to grayscale luminance and then repeated across three channels, so the original RAFT architecture remains unchanged.
+
+Changes have been made to:
 
 ```text
-alley_1
-alley_2
-ambush_4
-ambush_5
-ambush_6
-ambush_7
-bamboo_2
-bandage_2
-cave_2
-market_5
-market_6
-shaman_2
-shaman_3
-sleeping_1
-sleeping_2
-temple_2
-temple_3
+core/datasets.py
+evaluate.py
+train.py
 ```
 
-Validation scenes:
-```text
-ambush_2
-bamboo_1
-bandage_1
-cave_4
-market_2
-mountain_1
-```
+## Scene split
+| Split | Scenes |
+|---|---|
+| Training | `'alley_1'`, `'alley_2'`, `'ambush_4'`, `'ambush_5'`, `'ambush_6'`, `'ambush_7'`, `'bamboo_2'`, `'bandage_2'`, `'cave_2'`, `'market_5'`, `'market_6'`, `'shaman_2'`, `'shaman_3'`, `'sleeping_1'`, `'sleeping_2'`, `'temple_2'`, `'temple_3'` |
+| Validation | `'ambush_2'`, `'bamboo_1'`, `'bandage_1'`, `'cave_4'`, `'market_2'`, `'mountain_1'` |
 
-Training command: 
-```text
-python -u train.py --name raft-sintel-flyvis-split-bs8 --stage sintel_flyvis_split --validation sintel_flyvis_split --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+## Training
+This trains RAFT on the FlyVis Sintel training scenes using the original RGB Sintel frames.
+
+```bash
+python -u train.py --name raft-sintel-flyvis-split-rgb-bs8 --stage sintel_flyvis_split --validation sintel_flyvis_split --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
 ```
+This trains RAFT on the same FlyVis Sintel training scenes, but converts each RGB frame to luminance before training. The luminance image is replicated across three channels, preserving compatibility with the original RAFT encoder.
+```bash
+python -u train.py --name raft-sintel-flyvis-split-lum-bs8 --stage sintel_flyvis_split_lum --validation sintel_flyvis_split_lum --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+```
+Alternatively one can run on hpc `train_sintel.sh`
 
 ---
-
 # RAFT
 This repository contains the source code for our paper:
 

@@ -44,10 +44,20 @@ FLYVIS_VAL_SCENES = [
     "mountain_1",
 ]
 
+def rgb_to_luminance(img):
+    img = img.astype(np.float32)
+    y = (
+        0.299 * img[..., 0]
+        + 0.587 * img[..., 1]
+        + 0.114 * img[..., 2]
+    )
+    return np.clip(y, 0, 255).astype(np.uint8)
+
 class FlowDataset(data.Dataset):
-    def __init__(self, aug_params=None, sparse=False):
+    def __init__(self, aug_params=None, sparse=False, input_mode='rgb'):
         self.augmentor = None
         self.sparse = sparse
+        self.input_mode = input_mode
         if aug_params is not None:
             if sparse:
                 self.augmentor = SparseFlowAugmentor(**aug_params)
@@ -93,6 +103,13 @@ class FlowDataset(data.Dataset):
         img1 = np.array(img1).astype(np.uint8)
         img2 = np.array(img2).astype(np.uint8)
 
+        if self.input_mode == 'lum':
+            if len(img1.shape) == 3:
+                img1 = rgb_to_luminance(img1[..., :3])
+                img2 = rgb_to_luminance(img2[..., :3])
+        elif self.input_mode != 'rgb':
+            raise ValueError(f"Unknown input_mode: {self.input_mode}")
+
         # grayscale images
         if len(img1.shape) == 2:
             img1 = np.tile(img1[...,None], (1, 1, 3))
@@ -129,8 +146,8 @@ class FlowDataset(data.Dataset):
         
 
 class MpiSintel(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean', scenes=None):
-        super(MpiSintel, self).__init__(aug_params)
+    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean', scenes=None, input_mode="rgb"):
+        super(MpiSintel, self).__init__(aug_params, input_mode=input_mode)
         flow_root = osp.join(root, split, 'flow')
         image_root = osp.join(root, split, dstype)
 
@@ -262,8 +279,14 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         # Train only on the FlyVis scene-level training split.
         # Validation should use --validation sintel_flyvis_split.
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
-        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES)
-        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES)
+        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb')
+        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb')
+        train_dataset = 100*sintel_clean + 100*sintel_final
+    # luminance-only training
+    elif args.stage == 'sintel_flyvis_split_lum':
+        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
+        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
+        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
         train_dataset = 100*sintel_clean + 100*sintel_final
 
     elif args.stage == 'kitti':

@@ -195,7 +195,11 @@ def train(args):
                         results.update(evaluate.validate_sintel(model.module))
                     ### SINTEL FLYVIS SPLIT ###
                     elif val_dataset == 'sintel_flyvis_split':
-                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters))
+                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
+                                                                             input_mode='rgb', tag='sintel_flyvis_split'))
+                    elif val_dataset == 'sintel_flyvis_split_lum':
+                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
+                                                                             input_mode='lum', tag='sintel_flyvis_split_lum'))
                     elif val_dataset == 'kitti':
                         results.update(evaluate.validate_kitti(model.module))
 
