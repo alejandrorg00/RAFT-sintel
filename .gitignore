@@ -6,3 +6,8 @@ pytorch_env
 models
 build
 correlation.egg-info
+wandb
+# Checkpoints
+chekpoints/*
+!chekpoints/
+!chekpoints/raft-sintel-flyvis-split-rgb-bs8_20260522-163030.pth

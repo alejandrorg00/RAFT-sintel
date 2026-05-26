@@ -17,3 +17,8 @@ config: {'name': 'raft-sintel-flyvis-split-rgb-bs8', 'stage': 'sintel_flyvis_spl
 2026-05-22 16:30:38,025 INFO    MainThread:33852 [wandb_run.py:_redirect():2428] Wrapping output streams.
 2026-05-22 16:30:38,026 INFO    MainThread:33852 [wandb_run.py:_redirect():2451] Redirects installed.
 2026-05-22 16:30:38,031 INFO    MainThread:33852 [wandb_init.py:init():1095] run started, returning control to user process
+2026-05-24 03:15:42,291 INFO    MainThread:33852 [wandb_run.py:_finish():2271] finishing run alejandrorodriguezgarcia00/raft-sintel-flyvis/r1pl6mha
+2026-05-24 03:15:42,294 INFO    MainThread:33852 [wandb_run.py:_atexit_cleanup():2476] got exitcode: 0
+2026-05-24 03:15:42,296 INFO    MainThread:33852 [wandb_run.py:_restore():2458] restore
+2026-05-24 03:15:42,296 INFO    MainThread:33852 [wandb_run.py:_restore():2464] restore done
+2026-05-24 03:15:43,787 INFO    MainThread:33852 [wandb_run.py:_footer_sync_info():3877] logging synced files
