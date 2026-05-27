@@ -128,7 +128,13 @@ def validate_sintel(model, iters=32):
 
 ### SINTEL FLYVIS SPLIT ###
 @torch.no_grad()
-def validate_sintel_flyvis_split(model, iters=32, input_mode='rgb', tag='sintel_flyvis_split'):
+def validate_sintel_flyvis_split(
+    model,
+    iters=32,
+    input_mode='rgb',
+    flyvis_hex=False,
+    tag='sintel_flyvis_split',
+):
     model.eval()
     results = {}
 
@@ -138,23 +144,41 @@ def validate_sintel_flyvis_split(model, iters=32, input_mode='rgb', tag='sintel_
             dstype=dstype,
             scenes=datasets.FLYVIS_VAL_SCENES,
             input_mode=input_mode,
+            flyvis_hex=flyvis_hex,
         )
 
         epe_list = []
 
         for val_id in range(len(val_dataset)):
-            image1, image2, flow_gt, _ = val_dataset[val_id]
+            image1, image2, flow_gt, valid = val_dataset[val_id]
+
             image1 = image1[None].cuda()
             image2 = image2[None].cuda()
+            flow_gt = flow_gt.cuda()
+            valid = valid.cuda()
 
             padder = InputPadder(image1.shape)
             image1, image2 = padder.pad(image1, image2)
 
-            flow_low, flow_pr = model(image1, image2, iters=iters, test_mode=True)
-            flow = padder.unpad(flow_pr[0]).cpu()
+            flow_low, flow_pr = model(
+                image1,
+                image2,
+                iters=iters,
+                test_mode=True,
+            )
+
+            flow = padder.unpad(flow_pr[0])
 
             epe = torch.sum((flow - flow_gt) ** 2, dim=0).sqrt()
-            epe_list.append(epe.view(-1).numpy())
+
+            if flyvis_hex:
+                # In hex mode, only evaluate positions corresponding to real
+                # sampled hexals. Ignore empty cartesian embedding locations
+                # and the 32x32 padding.
+                valid_mask = valid >= 0.5
+                epe_list.append(epe[valid_mask].detach().cpu().view(-1).numpy())
+            else:
+                epe_list.append(epe.detach().cpu().view(-1).numpy())
 
         epe_all = np.concatenate(epe_list)
 
@@ -169,6 +193,9 @@ def validate_sintel_flyvis_split(model, iters=32, input_mode='rgb', tag='sintel_
         )
 
         results['%s_%s' % (tag, dstype)] = epe
+        results['%s_%s_1px' % (tag, dstype)] = px1
+        results['%s_%s_3px' % (tag, dstype)] = px3
+        results['%s_%s_5px' % (tag, dstype)] = px5
 
     return results
 
@@ -236,11 +263,11 @@ if __name__ == '__main__':
         elif args.dataset == 'sintel':
             validate_sintel(model.module)
         ### SINTEL FLYVIS SPLIT ###
-        elif args.dataset == 'sintel_flyvis_split':
+        elif args.dataset == 'sintel_flyvis_split_rgb':
             validate_sintel_flyvis_split(
                 model.module,
                 input_mode='rgb',
-                tag='sintel_flyvis_split',
+                tag='sintel_flyvis_split_rgb',
             )
 
         elif args.dataset == 'sintel_flyvis_split_lum':
@@ -248,6 +275,23 @@ if __name__ == '__main__':
                 model.module,
                 input_mode='lum',
                 tag='sintel_flyvis_split_lum',
+            )
+
+        ### SINTEL FLYVIS SPLIT HEX ###
+        elif args.dataset == 'sintel_flyvis_split_hex_rgb':
+            validate_sintel_flyvis_split(
+                model.module,
+                input_mode='rgb',
+                tag='sintel_flyvis_split_hex_rgb',
+                flyvis_hex=True
+            )
+
+        elif args.dataset == 'sintel_flyvis_split_hex_lum':
+            validate_sintel_flyvis_split(
+                model.module,
+                input_mode='lum',
+                tag='sintel_flyvis_split_hex_lum',
+                flyvis_hex=True
             )
 
         elif args.dataset == 'kitti':

@@ -207,7 +207,7 @@ def train(args):
 
     if args.stage != 'chairs' and args.restore_ckpt is not None:
         model.module.freeze_bn()
-
+    torch.set_default_device("cpu")
     train_loader = datasets.fetch_dataloader(args)
     optimizer, scheduler = fetch_optimizer(args, model)
 
@@ -225,9 +225,25 @@ def train(args):
     should_keep_training = True
     while should_keep_training:
 
+        torch.set_default_device("cpu")
+
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
             image1, image2, flow, valid = [x.cuda() for x in data_blob]
+
+            if total_steps == 0:
+                mag = torch.sum(flow**2, dim=1).sqrt()
+                valid0 = valid >= 0.5
+                valid1 = valid0 & (mag < MAX_FLOW)
+
+                print("\nDEBUG first batch")
+                print("image1:", image1.shape, image1.min().item(), image1.max().item())
+                print("flow:", flow.shape, flow.min().item(), flow.max().item())
+                print("valid:", valid.shape, valid.min().item(), valid.max().item())
+                print("valid >= 0.5:", valid0.sum().item(), "/", valid0.numel())
+                print("mag min/max/mean:", mag.min().item(), mag.max().item(), mag.mean().item())
+                print("mag < MAX_FLOW:", (mag < MAX_FLOW).sum().item(), "/", mag.numel())
+                print("valid after mag < MAX_FLOW:", valid1.sum().item(), "/", valid1.numel())
 
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
@@ -235,8 +251,20 @@ def train(args):
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
 
             flow_predictions = model(image1, image2, iters=args.iters)            
-
+            if total_steps == 0:
+                print("\nDEBUG predictions")
+                for k, fp in enumerate(flow_predictions):
+                    print(
+                        k,
+                        "finite:", torch.isfinite(fp).all().item(),
+                        "min:", fp.nan_to_num().min().item(),
+                        "max:", fp.nan_to_num().max().item(),
+                    )
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
+            if total_steps == 0:
+                print("\nDEBUG loss/metrics")
+                print("loss finite:", torch.isfinite(loss).item(), "loss:", loss.item())
+                print(metrics)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -258,12 +286,19 @@ def train(args):
                     elif val_dataset == 'sintel':
                         results.update(evaluate.validate_sintel(model.module))
                     ### SINTEL FLYVIS SPLIT ###
-                    elif val_dataset == 'sintel_flyvis_split':
+                    elif val_dataset == 'sintel_flyvis_split_rgb':
                         results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
-                                                                             input_mode='rgb', tag='sintel_flyvis_split'))
+                                                                             input_mode='rgb', tag='sintel_flyvis_split_rgb'))
                     elif val_dataset == 'sintel_flyvis_split_lum':
                         results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
                                                                              input_mode='lum', tag='sintel_flyvis_split_lum'))
+                    ### SINTEL FLYVIS SPLIT HEX ###
+                    elif val_dataset == 'sintel_flyvis_split_hex_rgb':
+                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
+                                                                             input_mode='rgb', tag='sintel_flyvis_split_hex_rgb', flyvis_hex=True))
+                    elif val_dataset == 'sintel_flyvis_split_hex_lum':
+                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
+                                                                             input_mode='lum', tag='sintel_flyvis_split_hex_lum', flyvis_hex=True))
                     elif val_dataset == 'kitti':
                         results.update(evaluate.validate_kitti(model.module))
 
@@ -309,7 +344,6 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
-    parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
     args = parser.parse_args()
 
     torch.manual_seed(1234)

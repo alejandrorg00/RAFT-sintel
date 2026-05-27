@@ -63,7 +63,7 @@ class FlowDataset(data.Dataset):
         self.input_mode = input_mode
         ### SINTEL FLYVIS HEX ###
         self.flyvis_hex = flyvis_hex
-        self.hex_preprocessor = RAFTFlyVisHexInput(extent=15, kernel_size=13, device="cuda") if flyvis_hex else None
+        self.hex_preprocessor = RAFTFlyVisHexInput(extent=15, kernel_size=13, output_size=256, device="cpu") if flyvis_hex else None
 
         if aug_params is not None:
             if sparse:
@@ -290,7 +290,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
             train_dataset = 100*sintel_clean + 100*sintel_final + things
     
     ### SINTEL FLYVIS SPLIT ###
-    elif args.stage == 'sintel_flyvis_split':
+    elif args.stage == 'sintel_flyvis_split_rgb':
         # Train only on the FlyVis scene-level training split.
         # Validation should use --validation sintel_flyvis_split.
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
@@ -304,19 +304,37 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
         train_dataset = 100*sintel_clean + 100*sintel_final
     ### SINTEL FLYVIS HEX ###
-    elif args.stage == 'sintel_flyvis_split_hex':
+    elif args.stage == 'sintel_flyvis_split_hex_rgb':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
         sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb', flyvis_hex=True)
         sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb', flyvis_hex=True)
         train_dataset = 100*sintel_clean + 100*sintel_final
-
+    # luminance-only training
+    elif args.stage == 'sintel_flyvis_split_hex_lum':
+        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
+        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum', flyvis_hex=True)
+        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum', flyvis_hex=True)
+        train_dataset = 100*sintel_clean + 100*sintel_final
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
         train_dataset = KITTI(aug_params, split='training')
+    
+    hex_stage = args.stage in [
+        'sintel_flyvis_split_hex_rgb',
+        'sintel_flyvis_split_hex_lum',
+    ]
 
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
-        pin_memory=False, shuffle=True, num_workers=4, drop_last=True)
+    num_workers = 0 if hex_stage else 4
+    torch.set_default_device("cpu")
+    train_loader = data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        pin_memory=False,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=True,
+    )
 
     print('Training with %d image pairs' % len(train_dataset))
     return train_loader

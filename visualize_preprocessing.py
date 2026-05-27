@@ -1,23 +1,45 @@
 # -*- coding: utf-8 -*-
 """
-Visualize FlyVis-style hex preprocessing for RAFT.
+Visualize the real RAFT input returned by the dataloader.
+
+Layout:
+    rgb sintel        / rgb hex sintel        / rgb raft input from dataset
+    lum sintel        / lum hex sintel        / lum raft input from dataset
+    optic flow sintel / optic flow hex sintel / optic flow raft target from dataset
+
+Important:
+    The third column comes from:
+
+        MpiSintel(..., flyvis_hex=True)
+
+    Therefore it is the actual tensor returned by the dataloader and the
+    tensor that train.py will feed to RAFT.
 
 Run from the RAFT-sintel repo root:
 
-    conda activate raft_env
-    python visualize_preprocessing.py
+    python visualize_preprocessing.py --scene alley_1 --dstype clean --save_mp4
 
-Plots:
-    Original Sintel RGB | Hexals Sintel RGB | Resized hex-cartesian RGB
-    Original Sintel lum | Hexals Sintel lum | Resized hex-cartesian lum
+To visualize training-like random crops:
+
+    python visualize_preprocessing.py --scene alley_1 --dstype clean --use_train_aug --save_mp4
+
+Outputs:
+    debug_hex/raft_hex_dataset_3x3.gif
+    debug_hex/raft_hex_dataset_3x3.mp4
 """
 
 from pathlib import Path
 import sys
+import argparse
+import random
 
+import imageio.v2 as imageio
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+import numpy as np
 import torch
-import torch.nn.functional as F
+
+torch.set_default_device("cpu")
 
 
 # ---------------------------------------------------------------------
@@ -25,112 +47,110 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent
 CORE_DIR = REPO_ROOT / "core"
+
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(CORE_DIR))
 
-from datasets import MpiSintel, FLYVIS_TRAIN_SCENES
-from flyvis_preprocessing.hexRenderer import BoxEye
-from flyvis_preprocessing.baseline_cnn import RegularHexToCartesianMap
+from datasets import MpiSintel
+from utils import flow_viz
 
 
-def move_boxeye_to_device(eye, device):
-    """Move all BoxEye tensors/modules used during rendering to the selected device."""
-    eye.conv = eye.conv.to(device)
-    eye.receptor_centers = eye.receptor_centers.to(device)
-    eye.min_frame_size = eye.min_frame_size.to(device)
-    return eye
+# ---------------------------------------------------------------------
+# Deterministic dataset access
+# ---------------------------------------------------------------------
+def get_item_deterministic(dataset, idx, seed):
+    """Get dataset[idx] with deterministic random augmentation.
+
+    This is useful when comparing:
+        raw dataset output
+        flyvis_hex=True dataset output
+
+    If both are called with the same seed, they should receive the same
+    random crop/augmentation.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    return dataset[idx]
 
 
-def rgb_to_luminance_torch(img):
-    """Convert RGB torch image [3,H,W], range 0..255, to luminance [H,W]."""
-    return 0.2989 * img[0] + 0.5870 * img[1] + 0.1140 * img[2]
-
-
+# ---------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------
 def tensor_rgb_to_numpy(img):
-    """Convert torch [3,H,W], 0..255 to numpy [H,W,3], 0..1."""
-    img = img.detach().cpu().float().clamp(0, 255) / 255.0
+    """Convert torch [3,H,W] to numpy [H,W,3] in [0,1]."""
+    img = img.detach().cpu().float()
+
+    if img.max() > 1.5:
+        img = img.clamp(0, 255) / 255.0
+    else:
+        img = img.clamp(0, 1)
+
     return img.permute(1, 2, 0).numpy()
 
 
 def tensor_gray_to_numpy(img):
     """Convert torch [H,W] or [1,H,W] to numpy [H,W]."""
     img = img.detach().cpu().float()
+
     while img.ndim > 2:
         img = img.squeeze(0)
+
     return img.numpy()
 
 
-def sample_boxeye_single_channel(channel_2d, eye):
-    """Sample one [H,W] channel with BoxEye.
-
-    Returns:
-        hexals: [1, 1, 1, 721]
-    """
-    seq = channel_2d[None, None]
-    return eye(seq, ftype="mean", hex_sample=True)
+def flow_tensor_to_rgb(flow):
+    """Convert torch flow [2,H,W] to RGB using RAFT's flow_viz."""
+    flow_np = flow.detach().cpu().float().permute(1, 2, 0).numpy()
+    flow_img = flow_viz.flow_to_image(flow_np)
+    return flow_img.astype(np.uint8)
 
 
-def sample_boxeye_rgb(img_rgb, eye):
-    """Sample RGB image [3,H,W] channel-wise with BoxEye.
+def flow_hex_to_rgb(hex_flow):
+    """Convert hex flow [2,N] to RGB colors [N,3] using RAFT's flow_viz."""
+    flow_np = hex_flow.detach().cpu().float().T.numpy()  # [N, 2]
+    flow_np = flow_np[None]  # [1, N, 2]
 
-    Returns:
-        hexals_rgb: [1, 1, 3, 721]
-    """
-    hex_channels = []
-    for c in range(3):
-        h = sample_boxeye_single_channel(img_rgb[c], eye)  # [1,1,1,721]
-        hex_channels.append(h)
-
-    return torch.cat(hex_channels, dim=2)  # [1,1,3,721]
+    rgb = flow_viz.flow_to_image(flow_np).astype(np.uint8)[0]  # [N, 3]
+    return rgb / 255.0
 
 
-def hexals_to_resized_cartesian(hexals, to_cartesian, size_hw):
-    """Convert hexals to regular cartesian map and resize to original frame size.
+def show_rgb(ax, img, title):
+    ax.imshow(tensor_rgb_to_numpy(img), interpolation="nearest")
+    ax.set_title(title)
+    ax.axis("off")
+
+
+def show_gray(ax, img, title, vmin=None, vmax=None):
+    ax.imshow(
+        tensor_gray_to_numpy(img),
+        cmap="gray",
+        interpolation="nearest",
+        vmin=vmin,
+        vmax=vmax,
+    )
+    ax.set_title(title)
+    ax.axis("off")
+
+
+def show_flow(ax, flow, title):
+    ax.imshow(flow_tensor_to_rgb(flow), interpolation="nearest")
+    ax.set_title(title)
+    ax.axis("off")
+
+
+def plot_hex_rgb(ax, hexals, eye, title):
+    """Plot RGB hexals.
 
     Args:
-        hexals:
-            [1,1,1,721] for luminance
-            [1,1,3,721] for RGB
-        to_cartesian:
-            RegularHexToCartesianMap
-        size_hw:
-            (H, W)
-
-    Returns:
-        resized:
-            [1,H,W] for luminance
-            [3,H,W] for RGB
-        raw_cart:
-            [1,31,31] or [3,31,31]
+        hexals: [1, 1, 3, 721]
     """
-    H, W = size_hw
-
-    cart = to_cartesian(hexals)
-
-    # Cases:
-    # luminance after RegularHexToCartesianMap can be [1,1,31,31]
-    # RGB is [1,1,3,31,31]
-    if cart.ndim == 4:
-        # [samples, frames, Hc, Wc] -> [1, Hc, Wc]
-        raw_cart = cart[0, 0][None]
-    elif cart.ndim == 5:
-        # [samples, frames, channels, Hc, Wc] -> [C, Hc, Wc]
-        raw_cart = cart[0, 0]
-    else:
-        raise RuntimeError(f"Unexpected cartesian map shape: {cart.shape}")
-
-    resized = F.interpolate(
-        raw_cart[None],
-        size=(H, W),
-        mode="nearest",
-    )[0]
-
-    return resized, raw_cart
-
-
-def plot_hexals_rgb(ax, hexals_rgb, eye, title):
-    """Plot RGB hexals spatially using receptor coordinates."""
-    values = hexals_rgb.detach().cpu()[0, 0]  # [3,721]
-    colors = values.T.clamp(0, 255) / 255.0   # [721,3]
+    values = hexals.detach().cpu()[0, 0]  # [3, 721]
+    colors = values.T.clamp(0, 255) / 255.0  # [721, 3]
 
     centers = eye.receptor_centers.detach().cpu()
     y = centers[:, 0].numpy()
@@ -144,14 +164,22 @@ def plot_hexals_rgb(ax, hexals_rgb, eye, title):
         s=115,
         edgecolors="none",
     )
-    ax.set_aspect("equal")
     ax.set_title(title)
+    ax.set_aspect("equal")
     ax.axis("off")
 
 
-def plot_hexals_lum(ax, hexals_lum, eye, title):
-    """Plot luminance hexals spatially using receptor coordinates."""
-    values = hexals_lum.detach().cpu().view(-1).numpy()
+def plot_hex_lum(ax, hexals, eye, title):
+    """Plot luminance hexals.
+
+    Args:
+        hexals: [1, 1, 3, 721] or [1, 1, 1, 721]
+
+    For input_mode='lum', datasets.py has already repeated luminance
+    over three channels. We plot channel 0.
+    """
+    values = hexals.detach().cpu()[0, 0]  # [C, 721]
+    values = values[0]  # [721]
 
     centers = eye.receptor_centers.detach().cpu()
     y = centers[:, 0].numpy()
@@ -160,7 +188,7 @@ def plot_hexals_lum(ax, hexals_lum, eye, title):
     ax.scatter(
         x,
         -y,
-        c=values,
+        c=values.numpy(),
         marker="h",
         s=115,
         cmap="gray",
@@ -168,116 +196,437 @@ def plot_hexals_lum(ax, hexals_lum, eye, title):
         vmax=255,
         edgecolors="none",
     )
-    ax.set_aspect("equal")
     ax.set_title(title)
+    ax.set_aspect("equal")
     ax.axis("off")
 
 
+def plot_hex_flow(ax, hex_flow, eye, title):
+    """Plot optical-flow hexals.
+
+    Args:
+        hex_flow: [1, 1, 2, 721]
+    """
+    flow_values = hex_flow.detach().cpu()[0, 0]  # [2, 721]
+    colors = flow_hex_to_rgb(flow_values)
+
+    centers = eye.receptor_centers.detach().cpu()
+    y = centers[:, 0].numpy()
+    x = centers[:, 1].numpy()
+
+    ax.scatter(
+        x,
+        -y,
+        c=colors,
+        marker="h",
+        s=115,
+        edgecolors="none",
+    )
+    ax.set_title(title)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+
+def make_video_frame(fig):
+    """Render matplotlib figure to RGB numpy array."""
+    canvas = FigureCanvas(fig)
+    canvas.draw()
+
+    buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+    w, h = fig.canvas.get_width_height()
+
+    return buf.reshape(h, w, 4)[..., :3].copy()
+
+
+def assert_shapes(name, img1, img2, flow, valid, hex_output_size):
+    """Print and assert the expected RAFT-hex shapes."""
+    print(f"\n{name}")
+    print("img1 :", tuple(img1.shape), img1.dtype)
+    print("img2 :", tuple(img2.shape), img2.dtype)
+    print("flow :", tuple(flow.shape), flow.dtype)
+    print("valid:", tuple(valid.shape), valid.dtype)
+
+    assert tuple(img1.shape) == (3, hex_output_size, hex_output_size), (
+        f"{name} img1 wrong shape: {img1.shape}"
+    )
+    assert tuple(img2.shape) == (3, hex_output_size, hex_output_size), (
+        f"{name} img2 wrong shape: {img2.shape}"
+    )
+    assert tuple(flow.shape) == (2, hex_output_size, hex_output_size), (
+        f"{name} flow wrong shape: {flow.shape}"
+    )
+    assert tuple(valid.shape) == (hex_output_size, hex_output_size), (
+        f"{name} valid wrong shape: {valid.shape}"
+    )
+
+
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Debug visualization running on {device}.")
+    parser = argparse.ArgumentParser()
 
-    dataset = MpiSintel(
-        aug_params=None,
+    parser.add_argument(
+        "--scene",
+        type=str,
+        default="alley_1",
+        help="Sintel scene to visualize, e.g. alley_1.",
+    )
+    parser.add_argument(
+        "--dstype",
+        type=str,
+        default="clean",
+        choices=["clean", "final"],
+        help="Sintel render type.",
+    )
+    parser.add_argument(
+        "--sample_start",
+        type=int,
+        default=0,
+        help="First pair index inside the selected scene.",
+    )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Number of pairs to render. If omitted, render the whole scene.",
+    )
+    parser.add_argument(
+        "--use_train_aug",
+        action="store_true",
+        help="Use the same crop/augmentation settings as training: crop_size=[368,768].",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=5,
+        help="GIF/MP4 frames per second.",
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default="debug_hex/raft_hex_dataset_3x3.gif",
+        help="Output GIF path relative to repo root.",
+    )
+    parser.add_argument(
+        "--save_mp4",
+        action="store_true",
+        help="Also save an MP4 video.",
+    )
+    parser.add_argument(
+        "--mp4_out",
+        type=str,
+        default="debug_hex/raft_hex_dataset_3x3.mp4",
+        help="Output MP4 path relative to repo root.",
+    )
+
+    args = parser.parse_args()
+
+    out_path = REPO_ROOT / args.out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.use_train_aug:
+        aug_params = {
+            "crop_size": [368, 768],
+            "min_scale": -0.2,
+            "max_scale": 0.6,
+            "do_flip": True,
+        }
+    else:
+        aug_params = None
+
+    # -----------------------------------------------------------------
+    # Raw Sintel datasets.
+    # These are for column 1 and also for manual hex visualization.
+    # -----------------------------------------------------------------
+    dataset_rgb_raw = MpiSintel(
+        aug_params=aug_params,
         split="training",
-        dstype="clean",
-        scenes=FLYVIS_TRAIN_SCENES,
+        dstype=args.dstype,
+        scenes=[args.scene],
         input_mode="rgb",
+        flyvis_hex=False,
     )
 
-    sample_idx = 0
-    img1, img2, flow, valid = dataset[sample_idx]
-
-    print("\nOriginal dataset tensors:")
-    print("img1:", img1.shape, img1.dtype, img1.device, img1.min().item(), img1.max().item())
-    print("img2:", img2.shape, img2.dtype, img2.device, img2.min().item(), img2.max().item())
-    print("flow:", flow.shape, flow.dtype, flow.device)
-    print("valid:", valid.shape, valid.dtype, valid.device)
-
-    img_rgb = img1.to(device, non_blocking=True)
-    H, W = img_rgb.shape[-2:]
-
-    eye = move_boxeye_to_device(BoxEye(extent=15, kernel_size=13), device)
-    to_cartesian = RegularHexToCartesianMap(extent=15).to(device)
-
-    # -----------------------------------------------------------------
-    # RGB branch
-    # -----------------------------------------------------------------
-    hexals_rgb = sample_boxeye_rgb(img_rgb, eye)  # [1,1,3,721]
-    resized_rgb, raw_cart_rgb = hexals_to_resized_cartesian(
-        hexals_rgb,
-        to_cartesian,
-        size_hw=(H, W),
+    dataset_lum_raw = MpiSintel(
+        aug_params=aug_params,
+        split="training",
+        dstype=args.dstype,
+        scenes=[args.scene],
+        input_mode="lum",
+        flyvis_hex=False,
     )
 
     # -----------------------------------------------------------------
-    # Luminance branch
+    # Real RAFT-hex datasets.
+    # These produce the actual tensors that train.py/evaluate.py will
+    # feed to RAFT when flyvis_hex=True.
     # -----------------------------------------------------------------
-    img_lum = rgb_to_luminance_torch(img_rgb)  # [H,W]
-    hexals_lum = sample_boxeye_single_channel(img_lum, eye)  # [1,1,1,721]
-    resized_lum, raw_cart_lum = hexals_to_resized_cartesian(
-        hexals_lum,
-        to_cartesian,
-        size_hw=(H, W),
+    dataset_rgb_hex = MpiSintel(
+        aug_params=aug_params,
+        split="training",
+        dstype=args.dstype,
+        scenes=[args.scene],
+        input_mode="rgb",
+        flyvis_hex=True,
     )
 
-    print("\nRGB hex output:")
-    print("hexals_rgb:", hexals_rgb.shape, hexals_rgb.dtype, hexals_rgb.device)
-    print("raw_cart_rgb:", raw_cart_rgb.shape, raw_cart_rgb.dtype, raw_cart_rgb.device)
-    print("resized_rgb:", resized_rgb.shape, resized_rgb.dtype, resized_rgb.device)
-
-    print("\nLuminance hex output:")
-    print("hexals_lum:", hexals_lum.shape, hexals_lum.dtype, hexals_lum.device)
-    print("raw_cart_lum:", raw_cart_lum.shape, raw_cart_lum.dtype, raw_cart_lum.device)
-    print("resized_lum:", resized_lum.shape, resized_lum.dtype, resized_lum.device)
-
-    # -----------------------------------------------------------------
-    # Plot
-    # -----------------------------------------------------------------
-    fig, axes = plt.subplots(2, 3, figsize=(18, 9))
-
-    # Row 1: RGB
-    axes[0, 0].imshow(tensor_rgb_to_numpy(img_rgb))
-    axes[0, 0].set_title("Original Sintel RGB")
-    axes[0, 0].axis("off")
-
-    plot_hexals_rgb(
-        axes[0, 1],
-        hexals_rgb,
-        eye,
-        title="Hexals Sintel RGB\nspatial receptor lattice",
+    dataset_lum_hex = MpiSintel(
+        aug_params=aug_params,
+        split="training",
+        dstype=args.dstype,
+        scenes=[args.scene],
+        input_mode="lum",
+        flyvis_hex=True,
     )
 
-    axes[0, 2].imshow(tensor_rgb_to_numpy(resized_rgb))
-    axes[0, 2].set_title(f"Resized hex-cartesian RGB\nshape={tuple(resized_rgb.shape[-2:])}")
-    axes[0, 2].axis("off")
-
-    # Row 2: luminance
-    axes[1, 0].imshow(tensor_gray_to_numpy(img_lum), cmap="gray", vmin=0, vmax=255)
-    axes[1, 0].set_title("Original Sintel luminance")
-    axes[1, 0].axis("off")
-
-    plot_hexals_lum(
-        axes[1, 1],
-        hexals_lum,
-        eye,
-        title="Hexals Sintel luminance\nspatial receptor lattice",
+    n_total = min(
+        len(dataset_rgb_raw),
+        len(dataset_lum_raw),
+        len(dataset_rgb_hex),
+        len(dataset_lum_hex),
     )
 
-    axes[1, 2].imshow(tensor_gray_to_numpy(resized_lum), cmap="gray", vmin=0, vmax=255)
-    axes[1, 2].set_title(f"Resized hex-cartesian luminance\nshape={tuple(resized_lum.shape[-2:])}")
-    axes[1, 2].axis("off")
+    if args.sample_start >= n_total:
+        raise ValueError(
+            f"sample_start={args.sample_start} is outside dataset length {n_total} "
+            f"for scene={args.scene}."
+        )
 
-    plt.tight_layout()
+    if args.max_samples is None:
+        sample_end = n_total
+    else:
+        sample_end = min(args.sample_start + args.max_samples, n_total)
 
-    out_dir = REPO_ROOT / "debug_hex"
-    out_dir.mkdir(exist_ok=True)
+    print(f"\nScene: {args.scene}")
+    print(f"dstype: {args.dstype}")
+    print(f"Dataset length for selected scene: {n_total}")
+    print(f"Visualizing pairs: {args.sample_start} to {sample_end - 1}")
+    print(f"Output GIF: {out_path}")
 
-    out_path = out_dir / "hex_preprocessing_rgb_vs_lum.png"
-    plt.savefig(out_path, dpi=200)
+    if args.use_train_aug:
+        print("Augmentation: training-like random crop/scale/flip")
+        print(f"aug_params: {aug_params}")
+    else:
+        print("Augmentation: None. Visualizing full Sintel frames.")
 
-    print(f"\nSaved figure to: {out_path}")
-    plt.show()
+    # Use the preprocessor attached to the actual hex dataset.
+    # This guarantees that the middle-column hex visualisation uses the
+    # same BoxEye/RegularHexToCartesianMap object as the dataloader.
+    hex_preprocessor = dataset_rgb_hex.hex_preprocessor
+    eye = hex_preprocessor.eye
+
+    hex_output_size = hex_preprocessor.output_size
+    raft_img_shape = f"[3,{hex_output_size},{hex_output_size}]"
+    raft_flow_shape = f"[2,{hex_output_size},{hex_output_size}]"
+
+    print(f"Internal RAFT-hex output size: {hex_output_size}x{hex_output_size}")
+
+    video_frames = []
+
+    for sample_idx in range(args.sample_start, sample_end):
+        seed = 12345 + sample_idx
+
+        # ------------------------------------------------------------
+        # Raw samples.
+        # If --use_train_aug is active, deterministic seeding ensures
+        # raw and hex datasets use the same random crop.
+        # ------------------------------------------------------------
+        img1_rgb_raw, img2_rgb_raw, flow_raw, valid_raw = get_item_deterministic(
+            dataset_rgb_raw,
+            sample_idx,
+            seed,
+        )
+
+        img1_lum_raw, img2_lum_raw, flow_lum_raw, valid_lum_raw = get_item_deterministic(
+            dataset_lum_raw,
+            sample_idx,
+            seed,
+        )
+
+        # ------------------------------------------------------------
+        # Actual RAFT-hex dataloader outputs.
+        # These are the tensors that would enter RAFT.
+        # ------------------------------------------------------------
+        img1_rgb_raft, img2_rgb_raft, flow_rgb_raft, valid_rgb_raft = get_item_deterministic(
+            dataset_rgb_hex,
+            sample_idx,
+            seed,
+        )
+
+        img1_lum_raft, img2_lum_raft, flow_lum_raft, valid_lum_raft = get_item_deterministic(
+            dataset_lum_hex,
+            sample_idx,
+            seed,
+        )
+
+        if sample_idx == args.sample_start:
+            print("\nRaw tensors")
+            print("img1_rgb_raw:", tuple(img1_rgb_raw.shape), img1_rgb_raw.dtype)
+            print("img1_lum_raw:", tuple(img1_lum_raw.shape), img1_lum_raw.dtype)
+            print("flow_raw    :", tuple(flow_raw.shape), flow_raw.dtype)
+            print("valid_raw   :", tuple(valid_raw.shape), valid_raw.dtype)
+
+            assert_shapes(
+                "RGB RAFT-hex dataset output",
+                img1_rgb_raft,
+                img2_rgb_raft,
+                flow_rgb_raft,
+                valid_rgb_raft,
+                hex_output_size,
+            )
+
+            assert_shapes(
+                "LUM RAFT-hex dataset output",
+                img1_lum_raft,
+                img2_lum_raft,
+                flow_lum_raft,
+                valid_lum_raft,
+                hex_output_size,
+            )
+
+            # Extra sanity check:
+            # manual call through the same preprocessor should match
+            # the flyvis_hex=True dataloader output because the raw
+            # and hex datasets were accessed with the same seed.
+            manual_img1_rgb = hex_preprocessor.image_to_raft_input(img1_rgb_raw)
+            manual_flow_rgb = hex_preprocessor.flow_to_raft_target(flow_raw)
+            manual_valid_rgb = hex_preprocessor.valid_to_raft_mask(valid_raw)
+
+            print("\nSanity check against manual preprocessing")
+            print(
+                "max |manual_img1_rgb - dataset_img1_rgb|:",
+                (manual_img1_rgb - img1_rgb_raft).abs().max().item(),
+            )
+            print(
+                "max |manual_flow_rgb - dataset_flow_rgb|:",
+                (manual_flow_rgb - flow_rgb_raft).abs().max().item(),
+            )
+            print(
+                "max |manual_valid_rgb - dataset_valid_rgb|:",
+                (manual_valid_rgb - valid_rgb_raft).abs().max().item(),
+            )
+
+        # ------------------------------------------------------------
+        # Hex visualisation for middle column.
+        # This is not what enters RAFT. It is the intermediate 721-hexal
+        # representation, shown for interpretability.
+        # ------------------------------------------------------------
+        rgb_hex = hex_preprocessor._sample_channels(img1_rgb_raw)  # [1,1,3,721]
+        lum_hex = hex_preprocessor._sample_channels(img1_lum_raw)  # [1,1,3,721]
+        flow_hex = hex_preprocessor._sample_channels(flow_raw)     # [1,1,2,721]
+
+        # Mask the displayed flow target so empty positions are not shown as real data.
+        flow_raft_masked = flow_rgb_raft * valid_rgb_raft[None]
+
+        # ------------------------------------------------------------
+        # 3 x 3 plot
+        # ------------------------------------------------------------
+        fig, axes = plt.subplots(3, 3, figsize=(12.8, 12), dpi=100)
+
+        # Row 1: RGB
+        show_rgb(
+            axes[0, 0],
+            img1_rgb_raw,
+            "RGB Sintel\nMpiSintel input_mode='rgb'",
+        )
+        plot_hex_rgb(
+            axes[0, 1],
+            rgb_hex,
+            eye,
+            "RGB hex Sintel\nintermediate BoxEye hexals",
+        )
+        show_rgb(
+            axes[0, 2],
+            img1_rgb_raft,
+            f"RGB RAFT input\nfrom MpiSintel(..., flyvis_hex=True)\n{raft_img_shape}",
+        )
+
+        # Row 2: luminance
+        show_rgb(
+            axes[1, 0],
+            img1_lum_raw,
+            "Lum Sintel\nMpiSintel input_mode='lum'",
+        )
+        plot_hex_lum(
+            axes[1, 1],
+            lum_hex,
+            eye,
+            "Lum hex Sintel\nintermediate BoxEye hexals",
+        )
+        show_rgb(
+            axes[1, 2],
+            img1_lum_raft,
+            f"Lum RAFT input\nfrom MpiSintel(..., flyvis_hex=True)\n{raft_img_shape}",
+        )
+
+        # Row 3: optical flow
+        show_flow(
+            axes[2, 0],
+            flow_raw,
+            "Optic flow Sintel\nraw target [2,H,W]",
+        )
+        plot_hex_flow(
+            axes[2, 1],
+            flow_hex,
+            eye,
+            "Optic flow hex Sintel\nintermediate BoxEye hexals",
+        )
+        show_flow(
+            axes[2, 2],
+            flow_raft_masked,
+            f"Optic flow RAFT target\nfrom MpiSintel(..., flyvis_hex=True)\n{raft_flow_shape}",
+        )
+
+        if args.use_train_aug:
+            aug_text = "training-like random crop/scale/flip"
+        else:
+            aug_text = "no augmentation, full Sintel frame"
+
+        fig.suptitle(
+            f"RAFT FlyVis-hex dataloader check | scene={args.scene} | "
+            f"pair={sample_idx}/{n_total - 1} | dstype={args.dstype}\n"
+            f"Columns: raw Sintel / intermediate hexals / actual dataloader output fed to RAFT | "
+            f"{aug_text}",
+            fontsize=12,
+        )
+
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+
+        video_frames.append(make_video_frame(fig))
+        plt.close(fig)
+
+        print(f"Rendered pair {sample_idx}")
+
+    # -----------------------------------------------------------------
+    # Save infinite-loop GIF
+    # -----------------------------------------------------------------
+    imageio.mimsave(
+        out_path,
+        video_frames,
+        fps=args.fps,
+        loop=0,
+    )
+
+    print("\nSaved GIF to:")
+    print(out_path)
+
+    # -----------------------------------------------------------------
+    # Optional MP4
+    # -----------------------------------------------------------------
+    if args.save_mp4:
+        mp4_path = REPO_ROOT / args.mp4_out
+        mp4_path.parent.mkdir(parents=True, exist_ok=True)
+
+        imageio.mimsave(
+            mp4_path,
+            video_frames,
+            fps=args.fps,
+            macro_block_size=16,
+        )
+
+        print("\nSaved MP4 to:")
+        print(mp4_path)
 
 
 if __name__ == "__main__":

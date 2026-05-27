@@ -10,13 +10,34 @@ The FlyVis-style split keeps validation scenes out of training. The fork current
 2. `sintel_flyvis_split_lum`  
    Luminance-only Sintel frames. RGB frames are converted to grayscale luminance and then repeated across three channels, so the original RAFT architecture remains unchanged.
 
+3. `sintel_flyvis_split_hex_rgb`  
+   FlyVis-style hexagonal preprocessing applied to RGB Sintel frames. Frames are first cropped/augmented as in standard RAFT training, then sampled with a BoxEye retina into 721 hexals, embedded into a `32×32` Cartesian map, and upsampled to `256×256` before being passed to the unchanged RAFT architecture.
+
+4. `sintel_flyvis_split_hex_lum`  
+   Same FlyVis-style hexagonal preprocessing, but starting from luminance-only Sintel frames repeated across three channels.
+
 Changes have been made to:
 
 ```text
 core/datasets.py
+core/flyvis_preprocessing/raft_hex_input.py
+core/flyvis_preprocessing/hexRenderer.py
+core/flyvis_preprocessing/baseline_cnn.py
 evaluate.py
 train.py
+visualize_preprocessing.py
 ```
+
+The RAFT-hex stages keep RAFT unchanged. The only difference is the dataloader preprocessing:
+```text
+Sintel crop 368×768
+→ BoxEye retinal sampling
+→ 721 hexals
+→ Cartesian 32×32 map
+→ upsample to 256×256
+→ standard RAFT
+```
+The 256×256 size is used as a RAFT-compatible interface. It does not add retinal information beyond the 721 hexals, but it gives RAFT a sufficiently large internal feature map for its correlation pyramid and recurrent update block.
 
 ## Scene split
 | Split | Scenes |
@@ -36,11 +57,26 @@ python -u train.py --name raft-sintel-flyvis-split-lum-bs8 --stage sintel_flyvis
 ```
 Alternatively one can run on hpc `train_sintel.sh`
 
+Similarly, to train the hex version one can use this for rgb training
+```bash
+python -u train.py --name raft-sintel-flyvis-split-hex-rgb-256-bs8 --stage sintel_flyvis_split_hex_rgb --validation sintel_flyvis_split_hex_rgb --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+```
+or this for lum training (closest to FlyVis training)
+
+```bash
+python -u train.py --name raft-sintel-flyvis-split-hex-rgb-256-bs8 --stage sintel_flyvis_split_hex_rgb --validation sintel_flyvis_split_hex_rgb --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+```
+Alternatively one can run on hpc `train_sintel_hex.sh`
+
 (Added wandb logs as TensorBoard was not working, to remove logs use `--no_wandb`)
 
 Run logs are available [here](https://wandb.ai/alejandrorodriguezgarcia00/raft-sintel-flyvis/runs/r1pl6mha?nw=nwuseralejandrorodriguezgarcia00)
 
-
+A visual check of the preprocessing can be generated with:
+```bash
+python visualize_preprocessing.py --scene alley_1 --dstype clean --save_mp4
+```
+![RAFT hex Sintel](debug_hex/raft_hex_dataset_3x3.gif)
 ---
 # RAFT
 This repository contains the source code for our paper:
