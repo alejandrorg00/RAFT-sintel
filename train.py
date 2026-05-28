@@ -109,10 +109,10 @@ class Logger:
         print(training_str + metrics_str)
 
         log_dict = {
-            k: self.running_loss[k] / SUM_FREQ
+            f"train/{k}": self.running_loss[k] / SUM_FREQ
             for k in self.running_loss
         }
-        log_dict["lr"] = self.scheduler.get_last_lr()[0]
+        log_dict["train/lr"] = self.scheduler.get_last_lr()[0]
 
         if self.use_wandb:
             wandb.log(log_dict, step=self.total_steps)

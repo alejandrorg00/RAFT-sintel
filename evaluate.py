@@ -192,10 +192,10 @@ def validate_sintel_flyvis_split(
             % (tag, dstype, epe, px1, px3, px5)
         )
 
-        results['%s_%s' % (tag, dstype)] = epe
-        results['%s_%s_1px' % (tag, dstype)] = px1
-        results['%s_%s_3px' % (tag, dstype)] = px3
-        results['%s_%s_5px' % (tag, dstype)] = px5
+        results[f'val/{dstype}/epe'] = epe
+        results[f'val/{dstype}/1px'] = px1
+        results[f'val/{dstype}/3px'] = px3
+        results[f'val/{dstype}/5px'] = px5
 
     return results
 

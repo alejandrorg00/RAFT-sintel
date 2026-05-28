@@ -6,7 +6,8 @@ pytorch_env
 models
 build
 correlation.egg-info
-wandb
+wandb/
+runs/
 debug_hex/*.mp4
-debug_hex/aug_training/
+debug_hex/aug_training/*.mp4
 checkpoints/

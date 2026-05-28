@@ -70,7 +70,7 @@ Alternatively one can run on hpc `train_sintel_hex.sh`
 
 (Added wandb logs as TensorBoard was not working, to remove logs use `--no_wandb`)
 
-Run logs are available [here](https://wandb.ai/alejandrorodriguezgarcia00/raft-sintel-flyvis/runs/r1pl6mha?nw=nwuseralejandrorodriguezgarcia00)
+Run logs are available [here](https://wandb.ai/alejandrorodriguezgarcia00/raft-sintel-flyvis)
 
 A visual check of the preprocessing can be generated with:
 ```bash
