@@ -14,9 +14,6 @@ import os.path as osp
 from utils import frame_utils
 from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
 
-from flyvis_preprocessing.raft_hex_input import RAFTFlyVisHexInput ### SINTEL FLYVIS HEX ###
-
-
 # FlyVis scene-level Sintel split.
 FLYVIS_TRAIN_SCENES = [
     "alley_1",
@@ -57,13 +54,10 @@ def rgb_to_luminance(img):
     return np.clip(y, 0, 255).astype(np.uint8)
 
 class FlowDataset(data.Dataset):
-    def __init__(self, aug_params=None, sparse=False, input_mode='rgb', flyvis_hex=False):
+    def __init__(self, aug_params=None, sparse=False, input_mode='rgb'):
         self.augmentor = None
         self.sparse = sparse
         self.input_mode = input_mode
-        ### SINTEL FLYVIS HEX ###
-        self.flyvis_hex = flyvis_hex
-        self.hex_preprocessor = RAFTFlyVisHexInput(extent=15, kernel_size=13, output_size=256, device="cpu") if flyvis_hex else None
 
         if aug_params is not None:
             if sparse:
@@ -139,14 +133,6 @@ class FlowDataset(data.Dataset):
             valid = torch.from_numpy(valid)
         else:
             valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
-        
-        
-        ### SINTEL FLYVIS HEX ###
-        if self.flyvis_hex:
-            img1 = self.hex_preprocessor.image_to_raft_input(img1)
-            img2 = self.hex_preprocessor.image_to_raft_input(img2)
-            flow = self.hex_preprocessor.flow_to_raft_target(flow)
-            valid = self.hex_preprocessor.valid_to_raft_mask(valid)
 
         return img1, img2, flow, valid.float()
 
@@ -161,8 +147,8 @@ class FlowDataset(data.Dataset):
         
 
 class MpiSintel(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean', scenes=None, input_mode="rgb", flyvis_hex=False):
-        super(MpiSintel, self).__init__(aug_params, input_mode=input_mode, flyvis_hex=flyvis_hex)
+    def __init__(self, aug_params=None, split='training', root='datasets/Sintel', dstype='clean', scenes=None, input_mode="rgb"):
+        super(MpiSintel, self).__init__(aug_params, input_mode=input_mode)
         flow_root = osp.join(root, split, 'flow')
         image_root = osp.join(root, split, dstype)
 
@@ -303,34 +289,19 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
         sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
         train_dataset = 100*sintel_clean + 100*sintel_final
-    ### SINTEL FLYVIS HEX ###
-    elif args.stage == 'sintel_flyvis_split_hex_rgb':
-        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
-        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb', flyvis_hex=True)
-        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='rgb', flyvis_hex=True)
-        train_dataset = 100*sintel_clean + 100*sintel_final
-    # luminance-only training
-    elif args.stage == 'sintel_flyvis_split_hex_lum':
-        aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
-        sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum', flyvis_hex=True)
-        sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum', flyvis_hex=True)
-        train_dataset = 100*sintel_clean + 100*sintel_final
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
         train_dataset = KITTI(aug_params, split='training')
     
-    hex_stage = args.stage in [
-        'sintel_flyvis_split_hex_rgb',
-        'sintel_flyvis_split_hex_lum',
-    ]
 
-    num_workers = 0 if hex_stage else 4
+    num_workers = 8
+
     torch.set_default_device("cpu")
     train_loader = data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        pin_memory=False,
+        pin_memory=True,
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,

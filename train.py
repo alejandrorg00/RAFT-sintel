@@ -6,8 +6,11 @@ import argparse
 import os
 import cv2
 import time
+import copy
 import numpy as np
 import matplotlib.pyplot as plt
+
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -19,6 +22,8 @@ from raft import RAFT
 import evaluate
 import datasets
 
+from flyvis_preprocessing.raft_hex_input import RAFTFlyVisHexInput
+
 # from torch.utils.tensorboard import SummaryWriter
 import wandb
 
@@ -27,40 +32,44 @@ try:
 except:
     # dummy GradScaler for PyTorch < 1.6
     class GradScaler:
-        def __init__(self):
+        def __init__(self, enabled=True):
             pass
+
         def scale(self, loss):
             return loss
+
         def unscale_(self, optimizer):
             pass
+
         def step(self, optimizer):
             optimizer.step()
+
         def update(self):
             pass
 
 
-# exclude extremly large displacements
+# exclude extremely large displacements
 MAX_FLOW = 400
 SUM_FREQ = 100
 VAL_FREQ = 5000
 
 
 def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
-    """ Loss function defined over sequence of flow predictions """
+    """Loss function defined over sequence of flow predictions."""
 
-    n_predictions = len(flow_preds)    
+    n_predictions = len(flow_preds)
     flow_loss = 0.0
 
-    # exlude invalid pixels and extremely large diplacements
-    mag = torch.sum(flow_gt**2, dim=1).sqrt()
+    # exclude invalid pixels and extremely large displacements
+    mag = torch.sum(flow_gt ** 2, dim=1).sqrt()
     valid = (valid >= 0.5) & (mag < max_flow)
 
     for i in range(n_predictions):
-        i_weight = gamma**(n_predictions - i - 1)
+        i_weight = gamma ** (n_predictions - i - 1)
         i_loss = (flow_preds[i] - flow_gt).abs()
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
-    epe = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
+    epe = torch.sum((flow_preds[-1] - flow_gt) ** 2, dim=1).sqrt()
     epe = epe.view(-1)[valid.view(-1)]
 
     metrics = {
@@ -78,14 +87,26 @@ def count_parameters(model):
 
 
 def fetch_optimizer(args, model):
-    """ Create the optimizer and learning rate scheduler """
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
+    """Create the optimizer and learning rate scheduler."""
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.wdecay,
+        eps=args.epsilon,
+    )
 
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps+100,
-        pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        args.lr,
+        args.num_steps + 100,
+        pct_start=0.05,
+        cycle_momentum=False,
+        anneal_strategy='linear',
+    )
 
     return optimizer, scheduler
-    
+
+
 class Logger:
     def __init__(self, model, scheduler, use_wandb=True):
         self.model = model
@@ -145,57 +166,34 @@ class Logger:
         if self.use_wandb:
             wandb.finish()
 
-# class Logger:
-#     def __init__(self, model, scheduler, log_dir=None):
-#         self.model = model
-#         self.scheduler = scheduler
-#         self.total_steps = 0
-#         self.running_loss = {}
-#         self.writer = None
-#         self.log_dir = log_dir
 
-#     def _print_training_status(self):
-#         metrics_data = [self.running_loss[k]/SUM_FREQ for k in sorted(self.running_loss.keys())]
-#         training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps+1, self.scheduler.get_last_lr()[0])
-#         metrics_str = ("{:10.4f}, "*len(metrics_data)).format(*metrics_data)
-        
-#         # print the training status
-#         print(training_str + metrics_str)
+def resolve_dataset_stage(args):
+    """Map hex training stages to their underlying RGB/LUM dataset stage.
 
-#         if self.writer is None:
-#             self.writer = SummaryWriter(log_dir=self.log_dir)
+    The Dataset only loads normal Sintel RGB/LUM crops.
+    Hex preprocessing is applied later on GPU inside train().
+    """
+    hex_stage = args.stage in [
+        'sintel_flyvis_split_hex_rgb',
+        'sintel_flyvis_split_hex_lum',
+    ]
 
-#         for k in self.running_loss:
-#             self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
-#             self.running_loss[k] = 0.0
+    if args.stage == 'sintel_flyvis_split_hex_rgb':
+        dataset_stage = 'sintel_flyvis_split_rgb'
+        hex_input_mode = 'rgb'
 
-#     def push(self, metrics):
-#         self.total_steps += 1
+    elif args.stage == 'sintel_flyvis_split_hex_lum':
+        dataset_stage = 'sintel_flyvis_split_lum'
+        hex_input_mode = 'lum'
 
-#         for key in metrics:
-#             if key not in self.running_loss:
-#                 self.running_loss[key] = 0.0
+    else:
+        dataset_stage = args.stage
+        hex_input_mode = None
 
-#             self.running_loss[key] += metrics[key]
-
-#         if self.total_steps % SUM_FREQ == SUM_FREQ-1:
-#             self._print_training_status()
-#             self.running_loss = {}
-
-#     def write_dict(self, results):
-#         if self.writer is None:
-#             self.writer = SummaryWriter(log_dir=self.log_dir)
-
-#         for key in results:
-#             self.writer.add_scalar(key, results[key], self.total_steps)
-
-#     def close(self):
-#         if self.writer is not None:
-#             self.writer.close()
+    return dataset_stage, hex_stage, hex_input_mode
 
 
 def train(args):
-
     model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
     print("Parameter Count: %d" % count_parameters(model))
 
@@ -207,107 +205,207 @@ def train(args):
 
     if args.stage != 'chairs' and args.restore_ckpt is not None:
         model.module.freeze_bn()
+
+    dataset_stage, hex_stage, hex_input_mode = resolve_dataset_stage(args)
+
+    args_for_loader = copy.copy(args)
+    args_for_loader.stage = dataset_stage
+
+    hex_preprocessor = None
+    if hex_stage:
+        hex_preprocessor = RAFTFlyVisHexInput(
+            extent=15,
+            kernel_size=13,
+            output_size=256,
+            device="cuda",
+        )
+
+    # Keep dataloader/default tensor creation on CPU.
     torch.set_default_device("cpu")
-    train_loader = datasets.fetch_dataloader(args)
+    train_loader = datasets.fetch_dataloader(args_for_loader)
+
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
     scaler = GradScaler(enabled=args.mixed_precision)
+
     run_id = time.strftime("%Y%m%d-%H%M%S")
     use_wandb = not args.no_wandb
+
     if use_wandb:
-        wandb.init(project="raft-sintel-flyvis", name=f"{args.name}_{run_id}", config=vars(args))
+        wandb.init(
+            project="raft-sintel-flyvis",
+            name=f"{args.name}_{run_id}",
+            config=vars(args),
+        )
+
     logger = Logger(model, scheduler, use_wandb=use_wandb)
 
-    VAL_FREQ = 5000
-    add_noise = True
-
     should_keep_training = True
-    while should_keep_training:
 
+    while should_keep_training:
         torch.set_default_device("cpu")
 
-        for i_batch, data_blob in enumerate(train_loader):
-            optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
+        pbar = tqdm(
+            enumerate(train_loader),
+            total=len(train_loader),
+            dynamic_ncols=True,
+            desc=f"train {args.stage}",
+        )
+
+        for i_batch, data_blob in pbar:
+            optimizer.zero_grad(set_to_none=True)
+
+            t0 = time.time()
+
+            image1, image2, flow, valid = [
+                x.cuda(non_blocking=True) for x in data_blob
+            ]
+
+            torch.cuda.synchronize()
+            t_cuda = time.time()
+
+            if hex_stage:
+                with torch.no_grad():
+                    image1 = hex_preprocessor.batch_image_to_raft_input(
+                        image1,
+                        input_mode=hex_input_mode,
+                    )
+                    image2 = hex_preprocessor.batch_image_to_raft_input(
+                        image2,
+                        input_mode=hex_input_mode,
+                    )
+                    flow = hex_preprocessor.batch_flow_to_raft_target(flow)
+                    valid = hex_preprocessor.batch_valid_to_raft_mask(valid)
+
+                torch.cuda.synchronize()
+
+            t_hex = time.time()
 
             if total_steps == 0:
-                mag = torch.sum(flow**2, dim=1).sqrt()
+                mag = torch.sum(flow ** 2, dim=1).sqrt()
                 valid0 = valid >= 0.5
                 valid1 = valid0 & (mag < MAX_FLOW)
 
-                print("\nDEBUG first batch")
-                print("image1:", image1.shape, image1.min().item(), image1.max().item())
-                print("flow:", flow.shape, flow.min().item(), flow.max().item())
-                print("valid:", valid.shape, valid.min().item(), valid.max().item())
-                print("valid >= 0.5:", valid0.sum().item(), "/", valid0.numel())
-                print("mag min/max/mean:", mag.min().item(), mag.max().item(), mag.mean().item())
-                print("mag < MAX_FLOW:", (mag < MAX_FLOW).sum().item(), "/", mag.numel())
-                print("valid after mag < MAX_FLOW:", valid1.sum().item(), "/", valid1.numel())
+                # print("\nDEBUG first batch")
+                # print("image1:", image1.shape, image1.min().item(), image1.max().item())
+                # print("flow:", flow.shape, flow.min().item(), flow.max().item())
+                # print("valid:", valid.shape, valid.min().item(), valid.max().item())
+                # print("valid >= 0.5:", valid0.sum().item(), "/", valid0.numel())
+                # print("mag min/max/mean:", mag.min().item(), mag.max().item(), mag.mean().item())
+                # print("mag < MAX_FLOW:", (mag < MAX_FLOW).sum().item(), "/", mag.numel())
+                # print("valid after mag < MAX_FLOW:", valid1.sum().item(), "/", valid1.numel())
 
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
-                image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
-                image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
+                image1 = (image1 + stdv * torch.randn_like(image1)).clamp(0.0, 255.0)
+                image2 = (image2 + stdv * torch.randn_like(image2)).clamp(0.0, 255.0)
 
-            flow_predictions = model(image1, image2, iters=args.iters)            
-            if total_steps == 0:
-                print("\nDEBUG predictions")
-                for k, fp in enumerate(flow_predictions):
-                    print(
-                        k,
-                        "finite:", torch.isfinite(fp).all().item(),
-                        "min:", fp.nan_to_num().min().item(),
-                        "max:", fp.nan_to_num().max().item(),
-                    )
+            flow_predictions = model(image1, image2, iters=args.iters)
+
+            torch.cuda.synchronize()
+            t_forward = time.time()
+
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
-            if total_steps == 0:
-                print("\nDEBUG loss/metrics")
-                print("loss finite:", torch.isfinite(loss).item(), "loss:", loss.item())
-                print(metrics)
+
+            # if total_steps == 0:
+            #     print("\nDEBUG loss/metrics")
+            #     print("loss finite:", torch.isfinite(loss).item(), "loss:", loss.item())
+            #     print(metrics)
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            
+
             scaler.step(optimizer)
-            scheduler.step()
             scaler.update()
+            scheduler.step()
+
+            torch.cuda.synchronize()
+            t_step = time.time()
 
             logger.push(metrics)
 
+            pbar.set_postfix({
+                "step": total_steps,
+                "cuda": f"{t_cuda - t0:.2f}s",
+                "hex": f"{t_hex - t_cuda:.2f}s",
+                "fwd": f"{t_forward - t_hex:.2f}s",
+                "bwd": f"{t_step - t_forward:.2f}s",
+                "epe": f"{metrics['epe']:.2f}",
+            })
+
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
-                PATH = 'checkpoints/%d_%s_%s.pth' % (total_steps+1, args.name, run_id)
+                PATH = 'checkpoints/%d_%s_%s.pth' % (
+                    total_steps + 1,
+                    args.name,
+                    run_id,
+                )
                 torch.save(model.state_dict(), PATH)
 
                 results = {}
                 for val_dataset in args.validation:
                     if val_dataset == 'chairs':
                         results.update(evaluate.validate_chairs(model.module))
+
                     elif val_dataset == 'sintel':
                         results.update(evaluate.validate_sintel(model.module))
-                    ### SINTEL FLYVIS SPLIT ###
+
                     elif val_dataset == 'sintel_flyvis_split_rgb':
-                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
-                                                                             input_mode='rgb', tag='sintel_flyvis_split_rgb'))
+                        results.update(
+                            evaluate.validate_sintel_flyvis_split(
+                                model.module,
+                                iters=args.iters,
+                                input_mode='rgb',
+                                tag='sintel_flyvis_split_rgb',
+                            )
+                        )
+
                     elif val_dataset == 'sintel_flyvis_split_lum':
-                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
-                                                                             input_mode='lum', tag='sintel_flyvis_split_lum'))
-                    ### SINTEL FLYVIS SPLIT HEX ###
+                        results.update(
+                            evaluate.validate_sintel_flyvis_split(
+                                model.module,
+                                iters=args.iters,
+                                input_mode='lum',
+                                tag='sintel_flyvis_split_lum',
+                            )
+                        )
+
                     elif val_dataset == 'sintel_flyvis_split_hex_rgb':
-                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
-                                                                             input_mode='rgb', tag='sintel_flyvis_split_hex_rgb', flyvis_hex=True))
+                        results.update(
+                            evaluate.validate_sintel_flyvis_split(
+                                model.module,
+                                iters=args.iters,
+                                input_mode='rgb',
+                                tag='sintel_flyvis_split_hex_rgb',
+                                flyvis_hex=True,
+                            )
+                        )
+
                     elif val_dataset == 'sintel_flyvis_split_hex_lum':
-                        results.update(evaluate.validate_sintel_flyvis_split(model.module, iters=args.iters, 
-                                                                             input_mode='lum', tag='sintel_flyvis_split_hex_lum', flyvis_hex=True))
+                        results.update(
+                            evaluate.validate_sintel_flyvis_split(
+                                model.module,
+                                iters=args.iters,
+                                input_mode='lum',
+                                tag='sintel_flyvis_split_hex_lum',
+                                flyvis_hex=True,
+                            )
+                        )
+
                     elif val_dataset == 'kitti':
                         results.update(evaluate.validate_kitti(model.module))
 
+                    else:
+                        raise ValueError(f"Unknown validation dataset: {val_dataset}")
+
                 logger.write_dict(results)
-                
+
                 model.train()
                 if args.stage != 'chairs' and args.restore_ckpt is not None:
                     model.module.freeze_bn()
-            
+
             total_steps += 1
 
             if total_steps >= args.num_steps:
@@ -315,6 +413,7 @@ def train(args):
                 break
 
     logger.close()
+
     PATH = 'checkpoints/%s_%s.pth' % (args.name, run_id)
     torch.save(model.state_dict(), PATH)
 
@@ -324,7 +423,7 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', default='raft', help="name your experiment")
-    parser.add_argument('--stage', help="determines which dataset to use for training") 
+    parser.add_argument('--stage', help="determines which dataset to use for training")
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
     parser.add_argument('--small', action='store_true', help='use small model')
     parser.add_argument('--validation', type=str, nargs='+')
@@ -333,7 +432,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
-    parser.add_argument('--gpus', type=int, nargs='+', default=[0,1])
+    parser.add_argument('--gpus', type=int, nargs='+', default=[0, 1])
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
     parser.add_argument('--no_wandb', action='store_true', help='disable wandb logging')
 
@@ -344,6 +443,7 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
+
     args = parser.parse_args()
 
     torch.manual_seed(1234)

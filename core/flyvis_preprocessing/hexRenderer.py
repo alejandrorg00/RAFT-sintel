@@ -186,16 +186,10 @@ class BoxEye:
             height, width = sequence.shape[2:]
 
         def _convolve() -> torch.Tensor:
-            """Convolve each sample separately to avoid unnecessary memory spikes."""
+            """Convolve all samples and frames in one batched call."""
             padded = F.pad(sequence, self.pad)
-
-            outs = []
-            for sample in torch.unbind(padded, dim=0):
-                # sample: [frames, H, W]
-                sample = sample.unsqueeze(1)  # [frames, 1, H, W]
-                outs.append(self.conv(sample))
-
-            return torch.cat(outs, dim=0)  # [samples * frames, 1, H, W]
+            x = padded.reshape(samples * frames, 1, padded.shape[-2], padded.shape[-1])
+            return self.conv(x)
 
         if ftype == "mean":
             out = _convolve() / float(self.kernel_size**2)

@@ -11,6 +11,9 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 import datasets
+
+from flyvis_preprocessing.raft_hex_input import RAFTFlyVisHexInput
+
 from utils import flow_viz
 from utils import frame_utils
 
@@ -97,14 +100,41 @@ def validate_sintel(model, iters=32):
     """ Peform validation using the Sintel (train) split """
     model.eval()
     results = {}
+
+    hex_preprocessor = None
+    if flyvis_hex:
+        hex_preprocessor = RAFTFlyVisHexInput(
+            extent=15,
+            kernel_size=13,
+            output_size=256,
+            device="cuda",
+        )    
+
     for dstype in ['clean', 'final']:
         val_dataset = datasets.MpiSintel(split='training', dstype=dstype)
         epe_list = []
 
         for val_id in range(len(val_dataset)):
             image1, image2, flow_gt, _ = val_dataset[val_id]
-            image1 = image1[None].cuda()
-            image2 = image2[None].cuda()
+            image1 = image1[None].cuda(non_blocking=True)
+            image2 = image2[None].cuda(non_blocking=True)
+            flow_gt = flow_gt[None].cuda(non_blocking=True)
+            valid = valid[None].cuda(non_blocking=True)
+
+            if flyvis_hex:
+                image1 = hex_preprocessor.batch_image_to_raft_input(
+                    image1,
+                    input_mode=input_mode,
+                )
+                image2 = hex_preprocessor.batch_image_to_raft_input(
+                    image2,
+                    input_mode=input_mode,
+                )
+                flow_gt = hex_preprocessor.batch_flow_to_raft_target(flow_gt)
+                valid = hex_preprocessor.batch_valid_to_raft_mask(valid)
+
+            flow_gt = flow_gt[0]
+            valid = valid[0]
 
             padder = InputPadder(image1.shape)
             image1, image2 = padder.pad(image1, image2)
@@ -144,7 +174,6 @@ def validate_sintel_flyvis_split(
             dstype=dstype,
             scenes=datasets.FLYVIS_VAL_SCENES,
             input_mode=input_mode,
-            flyvis_hex=flyvis_hex,
         )
 
         epe_list = []
