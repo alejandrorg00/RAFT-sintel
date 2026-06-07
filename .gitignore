@@ -11,3 +11,4 @@ runs/
 debug_hex/*.mp4
 debug_hex/aug_training/*.mp4
 checkpoints/
+checkpoints2/
