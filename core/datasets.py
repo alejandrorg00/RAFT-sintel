@@ -295,7 +295,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         train_dataset = KITTI(aug_params, split='training')
     
 
-    num_workers = 8
+    num_workers = 2
 
     torch.set_default_device("cpu")
     train_loader = data.DataLoader(
