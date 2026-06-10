@@ -288,14 +288,14 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.6, 'do_flip': True}
         sintel_clean = MpiSintel(aug_params, split='training', dstype='clean', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
         sintel_final = MpiSintel(aug_params, split='training', dstype='final', scenes=FLYVIS_TRAIN_SCENES, input_mode='lum')
-        train_dataset = 100*sintel_clean + 100*sintel_final
+        train_dataset = 100*sintel_clean + 100*sintel_final 
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
         train_dataset = KITTI(aug_params, split='training')
     
 
-    num_workers = 2
+    num_workers = 0
 
     torch.set_default_device("cpu")
     train_loader = data.DataLoader(

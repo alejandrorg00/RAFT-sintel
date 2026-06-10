@@ -1,2 +1,4 @@
-python -u train.py --name raft-sintel-flyvis-split-hex-rgb-bs8 --stage sintel_flyvis_split_hex_rgb --validation sintel_flyvis_split_hex_rgb --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
-python -u train.py --name raft-sintel-flyvis-split-hex-lum-bs8 --stage sintel_flyvis_split_hex_lum --validation sintel_flyvis_split_hex_lum --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+#!/bin/bash
+mkdir -p checkpoints
+python -u train.py --name raft-sintel-flyvis-split-hex-lum-256-bs10-gpuhex-fromscratch --stage sintel_flyvis_split_hex_lum --validation sintel_flyvis_split_hex_lum --gpus 0 --num_steps 100000 --batch_size 10 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma=0.85 --mixed_precision
+python -u train.py --name raft-sintel-flyvis-split-hex-rgb-256-bs10-gpuhex-fromscratch --stage sintel_flyvis_split_hex_rgb --validation sintel_flyvis_split_hex_rgb --gpus 0 --num_steps 100000 --batch_size 10 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma=0.85 --mixed_precision
