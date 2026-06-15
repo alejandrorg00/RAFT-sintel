@@ -49,7 +49,7 @@ The 256×256 size is used as a RAFT-compatible interface. It does not add retina
 This trains RAFT on the FlyVis Sintel training scenes using the original RGB Sintel frames.
 
 ```bash
-python -u train.py --name raft-sintel-flyvis-split-rgb-bs8 --stage sintel_flyvis_split --validation sintel_flyvis_split --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
+python -u train.py --name raft-sintel-flyvis-split-rgb-bs8 --stage sintel_flyvis_split_rgb --validation sintel_flyvis_split_rgb --gpus 0 --num_steps 100000 --batch_size 8 --lr 0.0001 --image_size 368 768 --wdecay 0.00001 --gamma 0.85 --mixed_precision
 ```
 This trains RAFT on the same FlyVis Sintel training scenes, but converts each RGB frame to luminance before training. The luminance image is replicated across three channels, preserving compatibility with the original RAFT encoder.
 ```bash
