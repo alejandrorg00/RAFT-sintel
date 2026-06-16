@@ -275,7 +275,7 @@ def train(args):
                         image2,
                         input_mode=hex_input_mode,
                     )
-                    flow = hex_preprocessor.batch_flow_to_raft_target(flow)
+                    flow = hex_preprocessor.batch_flow_to_raft_target(flow, flow_units="raft")
                     valid = hex_preprocessor.batch_valid_to_raft_mask(valid)
 
                 torch.cuda.synchronize()

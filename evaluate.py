@@ -264,7 +264,7 @@ def validate_sintel_flyvis_split(
                     image2,
                     input_mode=input_mode,
                 )
-                flow_gt = hex_preprocessor.batch_flow_to_raft_target(flow_gt)
+                flow_gt = hex_preprocessor.batch_flow_to_raft_target(flow_gt, flow_units="raft")
                 valid = hex_preprocessor.batch_valid_to_raft_mask(valid)
 
             padder = InputPadder(image1.shape)

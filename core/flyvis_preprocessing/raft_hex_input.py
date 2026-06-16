@@ -265,20 +265,35 @@ class RAFTFlyVisHexInput:
         raise ValueError(f"Unknown input_mode: {input_mode}")
 
 
-    def batch_flow_to_raft_target(self, flows):
+    def batch_flow_to_raft_target(self, flows, flow_units="raft"):
         """Convert flow batch to RAFT-compatible hex target.
 
         Args:
             flows: [B,2,H,W]
+                Flow in pixel units of the current Sintel image/crop.
+            flow_units:
+                "sintel" keeps the sampled Sintel/crop flow magnitudes.
+                "raft" rescales the flow magnitudes to the output grid
+                seen by RAFT, i.e. [output_size, output_size].
 
         Returns:
             [B,2,output_size,output_size]
         """
         flows = flows.to(self.device, non_blocking=True)
 
+        _, _, H, W = flows.shape
+
         hexals = self._batch_sample_channels(flows)             # [B,1,2,721]
         flow32 = self._batch_hexals_to_cart32(hexals)           # [B,2,32,32]
         flow_out = self._batch_resize_flow_like(flow32)         # [B,2,O,O]
+
+        if flow_units == "raft":
+            flow_out[:, 0] *= self.output_size / float(W)
+            flow_out[:, 1] *= self.output_size / float(H)
+        elif flow_units == "sintel":
+            pass
+        else:
+            raise ValueError(f"Unknown flow_units: {flow_units}")
 
         return flow_out
 
@@ -321,22 +336,35 @@ class RAFTFlyVisHexInput:
 
         return image
 
-    def flow_to_raft_target(self, flow):
+    def flow_to_raft_target(self, flow, flow_units="raft"):
         """Convert one Sintel flow target to RAFT-compatible hex target.
 
         Args:
-            flow:
-                [2, H, W]
+            flow: [2,H,W]
+                Flow in pixel units of the current Sintel image/crop.
+            flow_units:
+                "sintel" keeps the sampled Sintel/crop flow magnitudes.
+                "raft" rescales the flow magnitudes to the output grid
+                seen by RAFT.
 
         Returns:
-            flow_hex:
-                [2, output_size, output_size]
+            [2,output_size,output_size]
         """
         flow = flow.to(self.device, non_blocking=True)
 
-        hexals = self._sample_channels(flow)      # [1, 1, 2, 721]
-        flow32 = self._hexals_to_cart32(hexals)   # [2, 32, 32]
-        flow_out = self._resize_flow_like(flow32) # [2, output_size, output_size]
+        _, H, W = flow.shape
+
+        hexals = self._sample_channels(flow)       # [1,1,2,721]
+        flow32 = self._hexals_to_cart32(hexals)    # [2,32,32]
+        flow_out = self._resize_flow_like(flow32)  # [2,O,O]
+
+        if flow_units == "raft":
+            flow_out[0] *= self.output_size / float(W)
+            flow_out[1] *= self.output_size / float(H)
+        elif flow_units == "sintel":
+            pass
+        else:
+            raise ValueError(f"Unknown flow_units: {flow_units}")
 
         return flow_out
 

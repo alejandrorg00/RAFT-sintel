@@ -249,7 +249,7 @@ def explicit_hex_pipeline(preprocessor, image, flow, valid, input_mode):
     # 3. Final RAFT input / target 256x256
     # ------------------------------------------------------------
     image_raft = preprocessor.image_to_raft_input(image)
-    flow_raft = preprocessor.flow_to_raft_target(flow)
+    flow_raft = preprocessor.flow_to_raft_target(flow, flow_units="raft")
     valid_raft = preprocessor.valid_to_raft_mask(valid)
 
     flow_raft_masked = flow_raft * valid_raft[None]
